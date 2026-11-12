@@ -1,0 +1,168 @@
+\pdfoutput=1
+\documentclass[conference]{IEEEtran}
+\usepackage{times}
+\usepackage[numbers]{natbib}
+\usepackage{amsmath,amssymb,booktabs,graphicx}
+\usepackage[bookmarks=true,hidelinks]{hyperref}
+\hypersetup{pdftitle={Act to Think: Coordinating Information Acquisition and Resource-Aware Reasoning},pdfauthor={Qining Shen}}
+\newcommand{\E}{\mathbb{E}}
+\title{Act to Think: Coordinating Information Acquisition\\and Resource-Aware Reasoning}
+\author{\IEEEauthorblockN{Qining Shen}\IEEEauthorblockA{Johns Hopkins University\\601.697 Human-Centered Robotics --- Midterm Report\\November 11, 2026}}
+\begin{document}
+\maketitle
+\begin{abstract}
+An embodied agent may fail because it lacks external evidence or because it has not adequately processed the evidence already available. These difficulties call for different choices: gather information, spend computation on reasoning, or execute a task action. Act to Think studies how to coordinate these choices under resource limits. We formulate the proposed extension as a partially observable decision problem with separate external state, internal computational state, and remaining budget. As a first stage, collaborative baseline work has implemented and evaluated a RARRL-style PPO reasoning scheduler. Across five training seeds, the scheduler achieved 70.8 $\pm$ 0.5\% and 85.5 $\pm$ 0.5\% success on two reconstructed abstract tasks, exceeding threshold baselines while using fewer reasoning invocations. An adapted AI2-THOR evaluation with real LLM calls produced 62\% and 57\% success for two frozen schedulers, compared with 57\% for the threshold baseline. These results establish the orchestration baseline and its limits. Explicit information-gathering decisions and belief-aware policy learning remain the next research stage.
+\end{abstract}
+
+\section{Introduction and Research Objective}
+A robot instructed to move a particular box may be unable to see its label. In this case, changing viewpoint can provide evidence that further reasoning alone cannot recover. Alternatively, the robot may already have seen several relevant labels but still need to compare them against the instruction. Here, additional inspection may be unnecessary, while reasoning over the existing observations could improve its decision. The distinction is between acquiring evidence and using evidence effectively.
+
+ReAct interleaves reasoning with environmental interaction~\cite{yao2023react}. RARRL addresses the computational cost of reasoning by learning a high-level policy that chooses direct execution or a reasoning configuration~\cite{liu2026rarrl}. Act to Think builds on this orchestration perspective and asks:
+\begin{quote}
+\emph{When should an embodied agent first acquire information to improve subsequent reasoning, and how should its representation of uncertainty guide that choice?}
+\end{quote}
+The objective is a policy that coordinates task progress, information acquisition, and computation according to their downstream value and cost. This connects to the course themes of embodied decision-making and control under partial observability. The initial scope is high-level decision-making with a fixed executor, rather than learning motor control.
+
+The project currently has two distinct components. The completed component is a RARRL-style baseline implementation and evaluation, developed collaboratively~\cite{reproduction}. The proposed extension introduces explicit information-gathering actions and a belief-aware representation. The baseline experiments demonstrate progress toward the required infrastructure; they do not yet validate that extension.
+
+\section{Proposed Problem Formulation}
+\subsection{External evidence and internal computation}
+Let $x_t$ denote the hidden environment state and $o_t$ the observation. An external action $a_t$ induces
+\begin{equation}
+ x_{t+1}\sim P(\cdot\mid x_t,a_t),\qquad
+ o_{t+1}\sim O(\cdot\mid x_{t+1},a_t).
+\end{equation}
+The external interaction history is $H_t=(o_0,a_0,o_1,\ldots,a_{t-1},o_t)$, with informative execution feedback included in the observations. Its Bayesian belief is
+\begin{equation}
+ b_t(x)=P(x_t=x\mid H_t).
+\end{equation}
+An internal state $c_t$ stores the agent's retained evidence, current interpretation, and reasoning output. The remaining resource budget is $B_t$. The proposed high-level decision space is
+\begin{equation}
+\begin{split}
+u_t\in\{&\mathrm{ACT}_{\rm task}(a),\ \mathrm{ACT}_{\rm info}(a),\\
+        &\mathrm{THINK}(\ell,k)\},
+\end{split}
+\end{equation}
+where $\ell$ is a reasoning role and $k$ its computation budget. A task action directly advances the objective. An information-gathering action seeks a useful observation, potentially without immediate task reward. Both are external actions and may have mixed effects. THINK instead updates the internal state using available evidence,
+\begin{equation}
+ c_t^+\sim K_{\ell,k}(\cdot\mid c_t,H_t),
+\end{equation}
+and consumes resources. In the initial static setting it provides no new external observation. For a dynamic environment, elapsed reasoning time would also affect the external transition.
+
+This distinction is essential: thinking cannot add external evidence to the posterior justified by a fixed history. Its value must arise from a computational restriction, a limited executor, or a restricted representation. An ideal controller with an exact belief and free, unrestricted computation would not require a separately charged THINK operation. The experiments must therefore specify which information the executor can access and what computation it performs.
+
+\subsection{Belief estimation and objective}
+The proposed method estimates uncertainty from history using a Transformer encoder and a distributional head,
+\begin{equation}
+ h_t=f_\phi(H_t),\qquad \widehat b_t=q_\phi(x_t\mid H_t).
+\end{equation}
+In a finite simulator where exact posteriors are available, a candidate supervision objective is
+\begin{equation}
+ \mathcal L_{\rm belief}=\E_{H_t}\left[D_{\rm KL}(b_t\Vert\widehat b_t)\right].
+\end{equation}
+Latent-state cross-entropy is an alternative when state labels, but not exact posteriors, are available during training. Hidden states would not be supplied at deployment. A Transformer is a candidate architecture, not an assumed sufficient statistic or an established improvement over a recurrent encoder. Approximate information-state theory motivates evaluating reward prediction, controlled prediction, and recursive update quality~\cite{subramanian2022ais}.
+
+The orchestration policy $\pi_\theta(u_t\mid\widehat b_t,c_t,B_t)$ seeks
+\begin{equation}
+ \E_{\pi_\theta}\left[\sum_{t=0}^{T}\gamma^t
+ \bigl(r_t^{\rm task}-\lambda_I C_t^I-\lambda_C C_t^C\bigr)\right],
+\end{equation}
+where $C_t^I$ and $C_t^C$ are information-acquisition and reasoning costs. Resource-infeasible actions are excluded. The intended study tests whether information acquisition makes later reasoning more useful, rather than assuming that reasoning always improves decisions.
+
+\section{Implemented Baseline and Training Framework}
+\subsection{What the scheduler chooses}
+The implemented baseline addresses a narrower decision than Eq.~(3). A prescribed execution process determines the current task step; the scheduler chooses a reasoning level $k_t\in\{0,1,2\}$. Its input concatenates task features, remaining budget, and execution-history summaries. In the abstract tasks, level 0 executes directly, level 1 represents planning, and level 2 represents planning with verification. A nonzero-level step combines paid reasoning with the subsequent task execution. The scheduler does not independently select a viewpoint change, a new inspection, or a low-level physical action.
+
+The abstract simulator contains procedurally generated task-decomposition and structured-navigation scenarios. The former progresses through navigation, inspection, pickup, carrying, and placement; the latter contains a longer navigation segment. Some execution failures are fatal, while others permit retry. In the setting, reasoning changes failure probability through a prescribed model,
+\begin{equation}
+ p_{\rm fail}(s,k)=p_{\rm base}(s)\bigl(1-\eta_k u(s)\bigr),
+\end{equation}
+where $u(s)$ is an uncertainty signal and $\eta_k$ is the level's configured effectiveness. There are no LLM calls during this abstract training. Its purpose is to test resource allocation given a specified cost--effectiveness model.
+
+\subsection{PPO actor--critic learning}
+Only the scheduler's actor and critic are trained using PPO~\cite{schulman2017ppo}. The actor produces a distribution over the three levels; the critic estimates discounted return. They are separate MLPs, each with three ReLU hidden layers. The principal abstract results use width 64. The history input combines recent level--outcome pairs with pooled attempts and failures, rather than the proposed learned belief representation.
+
+At each training step, the actor samples a feasible level, the environment executes the current step, and the transition is stored. Eight environments each contribute 64 transitions, giving batches of 512. GAE estimates advantages, the clipped PPO objective updates the actor, and a squared return-prediction loss updates the critic. Each batch receives four update epochs. The main configuration uses learning rate $3\times10^{-4}$, discount $0.99$, GAE parameter $0.95$, and clipping parameter $0.2$.
+
+In the implementation, the reward is
+\begin{equation}
+ r_t=\mathbf{1}_{\rm completion}
+ -0.5\,\mathbf{1}_{\rm failure}
+ -\frac{1+C_t^{\rm reasoning}}{400}.
+\end{equation}
+Episodes have a maximum of 50 execution steps and initial reasoning budgets of 50--100 units. An action mask excludes levels whose maximum abstract cost exceeds the remaining budget. The network learns from returns, without action labels or dynamic-programming demonstrations.
+
+The main experiments train for 1,048,576 environment steps per task and seed on CPU. The LLM, executor, and environment-effectiveness parameters receive no PPO updates. For the 3D evaluation, a separately calibrated abstract configuration is used to train transfer schedulers, which are then frozen. Continued policy learning from 3D episodes has not yet been performed.
+
+\section{Progress and Preliminary Results}
+\subsection{Reconstructed abstract tasks}
+The collaborative reproduction includes a simulator, NumPy PPO implementation, budget masks, tuned heuristic baselines, saved checkpoints, and DP comparisons~\cite{reproduction}. Each task has 1,000 training scenarios, 200 validation scenarios, and 200 test scenarios. Evaluation replays each test scenario 20 times using matched random draws across policies. The principal PPO evaluation selects the most probable feasible level. Table~\ref{tab:abstract} summarizes five training seeds, 100--104; the reported standard deviations describe variation across these seeds, not confidence intervals over all possible tasks.
+
+\begin{table}[t]
+\centering
+\caption{Abstract-task evaluation. SR = success rate (\%); RI = mean reasoning invocations per episode. PPO SR reports mean $\pm$ sample standard deviation across five training seeds. All listed policies obey the abstract budget.}
+\label{tab:abstract}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+&\multicolumn{2}{c}{Task decomposition}&\multicolumn{2}{c}{Navigation}\\
+Policy&SR&RI&SR&RI\\
+\midrule
+Never think&43.6&0.00&53.2&0.00\\
+Always think&55.5&4.69&71.3&4.69\\
+Fixed interval&53.2&2.58&64.2&2.03\\
+Threshold&60.9&4.57&78.0&4.38\\
+PPO&$70.8\!\pm\!0.5$&3.46&$85.5\!\pm\!0.5$&2.62\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+PPO improves task-decomposition success by approximately 9.9 percentage points over the threshold rule while reducing reasoning invocations from 4.57 to 3.46. On navigation, it improves success by approximately 7.4 percentage points using the unrounded data, with invocations decreasing from 4.38 to 2.62. The results support learned budget allocation in this reconstructed hard-budget setting. They do not independently establish LLM reasoning quality, since the abstract reasoning benefit is prescribed by Eq.~(8).
+
+\subsection{Adapted 3D evaluation with real LLM calls}
+The next stage connects a frozen scheduler to AI2-THOR 5.0.0, ALFRED-derived task definitions, a fixed executor, and real GPT-6 Luna calls. Initial calibration measures stage-dependent decision accuracy and token cost. The transfer configuration permits reasoning to be ineffective or harmful at particular stages. Its five-stage episode structure is aligned with the 3D execution pipeline.
+
+The 3D evaluation changes the meaning of the nonzero levels: level 1 invokes the planner with reasoning effort \texttt{none}, and level 2 invokes the planner with effort \texttt{low}; level 2 is not a separate planner--verifier pair. Task candidates come from simulator metadata, and execution uses scripted interaction support. This is an adapted high-level evaluation, not a standard end-to-end visual ALFRED benchmark.
+
+The same 100 tasks are evaluated under seven policies, producing 700 episodes. The task set contains 40 simple placement tasks and 20 each requiring heating, cooling, or cleaning. Table~\ref{tab:3d} presents the principal comparisons. Values are per-policy results on these tasks; the two PPO rows are separate training seeds and should not be interpreted as a five-seed average.
+
+\begin{table}[t]
+\centering
+\caption{Adapted 3D evaluation, 100 tasks per policy. Calls and tokens are means per episode. ``Always low'' requests level 2, subject to the runtime budget mask.}
+\label{tab:3d}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Policy&Success (\%)&Calls&Tokens\\
+\midrule
+Never think&49&0.00&0\\
+Always low&57&5.37&2269\\
+Threshold&57&3.78&1345\\
+Frozen PPO, seed 100&62&3.21&1325\\
+Frozen PPO, seed 101&57&3.62&1347\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both frozen schedulers use fewer calls than the threshold policy. Seed 100 improves success over direct execution by 13 percentage points; the repository's paired task-bootstrap interval is $[4,22]$ percentage points. However, its five-point advantage over the threshold rule does not persist in seed 101, which ties that rule. Relative to always using level 2 when affordable, the PPO schedulers consume approximately 41--42\% fewer tokens. These results provide preliminary evidence of useful orchestration in the adapted pipeline, with limited cross-seed evidence for superiority over a strong heuristic.
+
+\subsection{Scope and lessons for Act to Think}
+The reproduction reconstructs task dynamics and changes budget handling, network width, the LLM backend, and runtime reasoning configurations. It should therefore be interpreted as a reconstruction and adaptation of the RARRL approach, rather than exact numerical replication of the original experimental protocol. The 3D sample is small, physical execution failures constrain success, and actual call costs can exceed reserved amounts: budget overruns occur in 1\% and 3\% of episodes for the two PPO schedulers. Thus, runtime masking does not guarantee the same strict feasibility as the abstract bounded-cost model.
+
+The central remaining gap is informational. Inspection occurs at prescribed stages, and the policy does not learn whether to seek a new observation before reasoning. Its history summary is also not an explicit belief estimator. The completed experiments establish an ACT/THINK baseline, while motivating tests of whether evidence-dependent decisions offer more room for improvement than a fixed phase-based rule.
+
+\section{Remaining Work and Evaluation Plan}
+The next stage will first construct a small partially observed inspection task with a finite hidden state, noisy queries, and query costs. Exact Bayesian beliefs and finite-horizon optimal action values will provide evaluation references. Unlike the current fixed pipeline, the controller must choose whether another observation is worth acquiring before commitment or reasoning.
+
+Second, the frozen executor and LLM will be evaluated on identical histories with different reasoning budgets. Holding external evidence fixed isolates computation from information acquisition. The experiment will measure whether extra reasoning improves decisions rather than assigning it a success bonus. The belief estimator will then be compared with the current history summary and a matched-capacity recurrent encoder. Any belief information exposed to the executor must be matched across relevant baselines; if that representation makes THINK redundant, the result will be reported.
+
+Finally, the policy over task actions, information acquisition, and THINK will be trained and compared with the established ACT/THINK baseline, fixed inspection schedules, uncertainty-threshold rules, and an exact-belief oracle. The primary measures will be success, cost-adjusted return, inspection count, reasoning calls, and token use. Belief error and action regret will diagnose why a policy succeeds or fails. Cost and sensor-noise sweeps, held-out episodes, and multiple training seeds will test the robustness of any advantage. The minimum deliverable is a reproducible task and a measured information--computation trade-off; the proposed extension remains a hypothesis rather than a completed result.
+
+\newpage
+\section{Conclusion}
+Act to Think studies how an embodied agent should coordinate new evidence, internal computation, and task execution. The completed RARRL-style baseline shows that learned orchestration can improve success and reduce reasoning use in reconstructed hard-budget tasks. An adapted 3D evaluation demonstrates integration with real LLM calls, while exposing a limited and seed-dependent advantage over a threshold heuristic. The next step is to move beyond prescribed inspection stages and test whether explicit information acquisition and belief-aware state representations improve resource-constrained decisions.
+
+\IEEEtriggeratref{3}
+\bibliographystyle{plainnat}
+\bibliography{references}
+\end{document}
