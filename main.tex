@@ -25,7 +25,7 @@ ReAct interleaves reasoning and interaction~\cite{yao2023react}, while RARRL sel
 \begin{quote}
 \emph{When should an embodied agent first acquire information to improve subsequent reasoning, and how should its representation of uncertainty guide that choice?}
 \end{quote}
-The proposed Type I contribution is a policy that jointly selects task progress, information acquisition, and internal computation by their downstream value under a shared budget. The scope is high-level decisions with a fixed executor. The completed scheduler and inspection pilot are foundations; they do not yet validate the full learned policy.
+The proposed contribution is a policy that jointly selects task progress, information acquisition, and internal computation by their downstream value under a shared budget. The scope is high-level decisions with a fixed executor. The completed scheduler and inspection pilot are foundations; they do not yet validate the full learned policy.
 
 This connects to \href{https://alliance-ai.cs.jhu.edu/teaching/HCR/}{course topics}: dynamic programming (Lecture 3), safety filtering (Lectures 5--6), and planning with hidden human states (Lecture 14). The budget mask is a conceptual analogue of filtering for resource feasibility, not a physical-safety certificate. The Lecture 14 connection concerns latent human intent, distinct from the robot's computational state. KnowNo connects clarification to conformal prediction and LLM assistance (Lectures 17 and 19); this project does not implement conformal calibration.
 
